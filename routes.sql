@@ -11,12 +11,12 @@ CREATE TABLE if not exists vehicles (
 	shift_end time,
     phone_number text,
 
-    start_location_id integer,
+    start_location_id text,
     start_location_address text,
     start_location_lat int,
     start_location_long int,
 
-    end_location int,
+    end_location_id text,
     end_location_address text,
     end_location_lat int,
     end_location_long int
@@ -43,9 +43,20 @@ create table  visits(
     location_lat integer,
     location_long integer,
 
+    is_vehicle_start_location boolean,
+    is_vehicle_end_location boolean,
+    
     notified_out_of_delivery boolean,
     notified_planned_delivery boolean,
-    notified_cancelled boolean
+    notified_cancelled boolean,
+    notified_completed boolean
+);
+
+create table if not exists notifications(
+    project_id text references projects(id),
+    location_id text,
+    created_at timestamp,
+    notification_type text
 );
 
 create table if not exists custom_notes(
@@ -66,3 +77,5 @@ create table vehicle_capacities (
 	capacity_type text,
 	capacity_number integer
 )
+
+

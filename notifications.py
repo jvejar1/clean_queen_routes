@@ -7,7 +7,7 @@ import array as arr
 import numpy as np
 import json
 import requests
-
+from psycopg2.extras import NamedTupleCursor
 url = 'https://api.routific.com/product/projects'
 headers = {'content-type': 'application/json',
             'Authorization': 'bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI1ZTc3ZTdiZjgzYjc5ODAwMTcxZWE1ZjYiLCJpYXQiOjE2MDI1OTM3MTV9.2kTMhN8iUMkSiVwJsJdgtphuEdPVBYvh5eVsX5IOV9k'}
@@ -60,25 +60,42 @@ class Model():
             vehicles_ids = project['fleet'].keys()
             for vehicle_id in vehicles_ids:
                 vehicle = project['fleet'][vehicle_id]
-    
                 vehicle_name = vehicle['name']
                 vehicle_shift_start = vehicle['shift-start']
                 vehicle_shift_end = vehicle['shift-end']
                 vehicle_phone_number = vehicle['phone-number']
+                start_location = vehicle['start-location']
+                start_location_id = start_location['id']
+                start_location_address = start_location['address']
+                start_location_lat = start_location['lat']
+                start_location_long = start_location['lng']
+
+                end_location = vehicle['end-location']
+                end_location_id = None
+                end_location_address = None
+                end_location_lat = None
+                end_location_long = None
+                if end_location:
+                    end_location_id = end_location['id']
+                    end_location_address = end_location['address']
+                    end_location_lat = end_location['lat']
+                    end_location_long = end_location['lng']
+
                 cursor .execute("Select * from vehicles where id='{0}' limit 1;".format(vehicle_id))
                 vehicle_already_registered = cursor.fetchone()
                 if(vehicle_already_registered):
-                    query  = "Update vehicles set name='{}', shift_start='{}', shift_end='{}' where id='{}';".format(vehicle_name,vehicle_shift_start, vehicle_shift_end,vehicle_id)
-                    cursor.execute(query)
+                    query  = "Update vehicles set name=%s, shift_start=%s, shift_end=%s, start_location_id=%s, end_location_id=%s where id=%s;"
+                    args = (vehicle_name, vehicle_shift_start, vehicle_shift_end, start_location_id, end_location_id, vehicle_id)
+                    cursor.execute(query, args)
                 else:
-                    cursor.execute("Insert into vehicles (id, name, shift_start, shift_end) values ('{}','{}','{}','{}')".format(vehicle_id, vehicle_name,vehicle_shift_start, vehicle_shift_end))
-            
-            
-                cursor.execute(query)
+                    query ="Insert into vehicles (id, name, shift_start, shift_end, start_location_id, end_location_id) values (%s,%s,%s,%s, %s, %s)"
+                    args = (vehicle_id, vehicle_name,vehicle_shift_start, vehicle_shift_end, start_location_id, end_location_id)
+                    cursor.execute(query, args)
+                
                 #print("vehicle ",cursor.statusmessage)
 
-            #check for the cancelled visits are that are in not served
-            project['distpatchedSolution']['unserved']
+            #check for the cancelled visits are that are in not served  
+            
             
             #register the routes
             routes_url = 'https://api.routific.com/product/projects/{}/routes'.format(project_id)
@@ -87,21 +104,18 @@ class Model():
                 routes = routes_request.json()        
             except Exception:
                 continue
-            
+            fleet = project['fleet']
             for route in routes:
                 vehicle_id = route['vehicle']['id']
+                vehicle = fleet[vehicle_id]
                 visits = route['solution']['visits']
-                #TODO: delete the visits that are no longer in the route
-
+                ids_of_served_visits =[]
                 for visit in visits:
                     is_break = visit['break']
                     arrival_time = visit['arrival_time'] 
-                    finish_time = visit['finish_time'] if 'finish_time' in visit else arrival_time #first and last visit(driver) do not have finish_time_field
-
-
+                    finish_time = visit['finish_time'] if 'finish_time' in visit else arrival_time #first and last visit(driver) do not 
                     expected_arrival_time = visit['expected_arrival_time'] if 'expected_arrival_time' in visit else arrival_time
                     expected_finish_time = visit['expected_finish_time'] if 'expected_finish_time' in visit else finish_time
-                    
                     phone_number = visit['phone'] if 'phone' in visit else None
                     status = visit['status'] if 'status' in visit else None
                     notes = visit['notes'] if 'notes' in visit else None
@@ -110,37 +124,26 @@ class Model():
                     if 'location' in visit:
 
                         location_id = visit['location']['id']
-                        location_name = visit['location']['name'] if 'name' in visit['location'] else None
+                        location_name = visit['location']['name'] if 'name' in visit['location'] else ''
                         location_address = visit['location']['address']
                         location_lat = visit['location']['lat']
                         location_long = visit['location']['lng']
                     else:
-                        location_id = None
-                        location_name = None
-                        location_address = None
-                        location_lat = None
-                        location_long = None
+                        #is a break
+                        location_id = location_name = location_address =''
+                        location_lat = location_long = None
 
-                    #insert or update
+                    is_vehicle_start_location = location_id == vehicle['start-location']['id']
+                    is_vehicle_end_location = False if vehicle['end-location']==None else location_id == vehicle['end-location']['id']
 
-                    query = """Select * from visits where location_id = %s and vehicle_id = %s and project_id = %s"""
-                    cursor.execute(query, (location_id, vehicle_id, project_id))
-                    visit_has_to_be_updated = cursor.fetchone()
-                    
-                    if(visit_has_to_be_updated):
-                        query = """
-                        Update visits 
-                        set vehicle_id=%s,
-                        location_name=%s,
-                        location_address=%s,
-                        location_long=%s,
-                        location_lat=%s,
-                        arrival_time=%s,
-                        finish_time=%s,
-                        estimated_arrival_time=%s,
-                        estimated_finish_time =%s,
-                        status=%s
-                            where location_id=%s;"""
+                    #insert or update: the visit can be in the project but in another vehicle
+                    query = """Select * from visits 
+                    where (location_id = %s and project_id = %s) and (is_break=FALSE or (is_break=TRUE and vehicle_id=%s))"""
+                    cursor.execute(query,(location_id, project_id, vehicle_id))
+                    if cursor.rowcount>0:
+                        query = """Update visits set vehicle_id=%s, location_name=%s, location_address=%s, location_long=%s,
+                        location_lat=%s, arrival_time=%s, finish_time=%s, estimated_arrival_time=%s, estimated_finish_time =%s,
+                        status=%s, is_vehicle_start_location=%s, is_vehicle_end_location=%s where location_id=%s and project_id=%s;"""
                         args = (vehicle_id,
                         location_name,
                         location_address,
@@ -150,14 +153,18 @@ class Model():
                         finish_time,
                         expected_arrival_time,
                         expected_finish_time,
-                        status, 
-                        location_id)
-                    
+                        status,
+                        is_vehicle_start_location,
+                        is_vehicle_end_location,
+                        location_id,
+                        project_id)
+
                     else:
-                        query = """Insert into visits (vehicle_id, project_id, location_id, location_name, location_address, location_long, location_lat, arrival_time, finish_time, estimated_arrival_time, estimated_finish_time,status)
-                        values(%s,%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-                        args = (vehicle_id, project_id, location_id, location_name, location_address, location_long, location_lat, arrival_time, finish_time, expected_arrival_time, expected_finish_time,status)
-                    
+                        #insert
+                        query = """Insert into visits (vehicle_id, project_id, location_id, location_name, location_address, location_long, location_lat, arrival_time, finish_time, estimated_arrival_time, estimated_finish_time,status, is_break, is_vehicle_start_location, is_vehicle_end_location)
+                        values(%s,%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                        args = (vehicle_id, project_id, location_id, location_name, location_address, location_long, location_lat, arrival_time, finish_time, expected_arrival_time, expected_finish_time,status, is_break, is_vehicle_start_location, is_vehicle_end_location)
+
                     try:
                         cursor.execute(query, args)
                     except psycopg2.errors.DatetimeFieldOverflow as e:
@@ -165,6 +172,13 @@ class Model():
                         print ("Error while sql: ", cursor.query)
                         print (e)
                     #print('visit ', cursor.statusmessage)
+                    ids_of_served_visits.append(location_id)
+
+                unserved_visits_query = "update visits set vehicle_id=NULL where location_id not in %s and project_id=%s and vehicle_id=%s"
+                cursor.execute(unserved_visits_query, (tuple(ids_of_served_visits), project_id, vehicle_id))
+                if cursor.rowcount>0:
+                    print ("Visits that are no longer with {} ({}): {}".format(vehicle_name, project_name, cursor.rowcount))
+                
         conn.commit()
         pass
 
@@ -184,19 +198,7 @@ class Model():
         pass
 
     def out_of_delivery_visits(self):
-        today = datetime.datetime.today()
-        query = "Select id as k from projects where route_date='{}'".format(today)
-        self.cursor.execute(query)
-        today_projects_ids = self.cursor.fetchall()
-        x=today_projects_ids[0][0]
-        today_projects_ids = np.array([i[0] for i in today_projects_ids])
-        print (today_projects_ids)
-        now_time = datetime.time(11,50)
         
-        query = "Select * from visits where project_id in (SELECT id from projects where route_date='{}') and arrival_time>'{}' and status!='done' and status!='arrived' ".format(today, now_time)
-
-        self.cursor.execute(query)
-        return self.cursor.fetchall()
         pass
 
     def get_cancelled_visits(self):
@@ -219,16 +221,16 @@ conn = psycopg2.connect(
     host="localhost",
     database="clean_queen_routes",
     user="postgres",
-    password="postgres")
+    password="postgres",
+    cursor_factory=NamedTupleCursor)
 cursor = conn.cursor()
 
 model = Model()
 
-log = open('notifications.log','a+')
-
 while True:
     model.sync_data(conn, cursor)
 
+    log_lines = ""
     #a route is identified by a project_id and a vehicle_id
     today_routes_ids = """
     select v.project_id, v.vehicle_id 
@@ -242,20 +244,32 @@ while True:
     cursor.execute(today_routes_ids, args)     
     routes_ids = cursor.fetchall()
     planned_delivery_notification_window = 90
+    early_visits_time_until = datetime.datetime.now() + datetime.timedelta(minutes = planned_delivery_notification_window)
+    early_visits_time_until = early_visits_time_until.time()
+    now_time = datetime.datetime.now().time()
+
     for route_id in routes_ids:
         project_id = route_id[0]
         vehicle_id = route_id[1]
-
         #notify planned delivery
         route_has_been_started_query = "select * from visits where project_id='{}' and vehicle_id='{}' and status='done' order by arrival_time asc limit 1".format(project_id, vehicle_id)
         cursor.execute(route_has_been_started_query)
         route_has_been_started = cursor.fetchone()
         if route_has_been_started:
         #notify the userssssss
-            print ('route_started')
-            visits_to_notify_query = "select location_name, arrival_time, location_id from visits where project_id='{}' and vehicle_id='{}' and (status!='done' or status is NULL) and (notified_planned_delivery != TRUE or notified_planned_delivery is NULL)".format(project_id, vehicle_id)
+            visits_to_notify_query = """select location_name, arrival_time, location_id from visits vi, vehicles ve
+            where vi.project_id = %s 
+            and vi.vehicle_id=%s 
+            and (vi.status!='done' or vi.status is NULL) 
+            and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
+            and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
+            and vi.is_break!=TRUE and vi.arrival_time >= %s
+                order by arrival_time asc;
+            """
+            args = (project_id, vehicle_id, early_visits_time_until)
+
             try:
-                cursor.execute(visits_to_notify_query)
+                cursor.execute(visits_to_notify_query, args)
                 visits_to_notify = cursor.fetchall()
             except Exception:
                 conn.rollback()
@@ -267,16 +281,42 @@ while True:
                 today = datetime.datetime.today()
                 notification_arrival_from = datetime.datetime.combine(today,visit_arrival_time) - datetime.timedelta(minutes = planned_delivery_notification_window)
                 notification_arrival_until = datetime.datetime.combine(today,visit_arrival_time) + datetime.timedelta(minutes = planned_delivery_notification_window)
-                
+                                
                 #set the visit as notificated
                 visit_was_notified = True
-                update_visit_query = "Update visits set notified_planned_delivery=%s where location_id=%s;"
-            
-                cursor.execute(update_visit_query, (visit_was_notified, visit_id))
-                notification = str(datetime.datetime.now())+ ": Notificación pedido "+ str(visit_to_notify[0]) + ": su pedido llegará entre "+str(notification_arrival_from.time()) +" y "+ str(notification_arrival_until.time())
+                update_visit_query = "Update visits set notified_planned_delivery=%s where location_id=%s and project_id=%s;"            
+                cursor.execute(update_visit_query, (visit_was_notified, visit_id, project_id))
+
+                notification = str(datetime.datetime.now().time())+ " \t "+ (visit_to_notify[0]) + "\t Ha salido un vehículo con su pedido y llegará llegará entre "+str(notification_arrival_from.time()) +" y "+ str(notification_arrival_until.time())
                 print ("notification "+ cursor.statusmessage)
                 print (notification)
-                log.write(notification + "\n")
+                log_lines += notification + "\n"
+            
+            early_visits_to_notify_query = """ select location_name, arrival_time, location_id from visits vi, vehicles ve
+            where vi.project_id=%s 
+            and vi.vehicle_id=%s 
+            and (vi.status!='done' or vi.status is NULL) 
+            and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
+            and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
+            and vi.is_break!=TRUE and vi.arrival_time <=%s
+                order by arrival_time asc"""
+            args = (project_id, vehicle_id, early_visits_time_until)
+            cursor.execute(early_visits_to_notify_query, args)
+            early_visits = cursor.fetchall()
+            for visit in early_visits:
+                location_name = visit.location_name
+                location_id = visit.location_id
+                notification = str(datetime.datetime.now().time())+ " \t {} \t Ha salido un vehículo con su pedido y llegará pronto".format(location_name)
+
+                #update the visit
+                visit_was_notified = True
+                update_query = "Update visits set notified_out_of_delivery=%s, notified_planned_delivery=%s where location_id = %s and project_id=%s"
+                cursor.execute(update_query, (visit_was_notified, visit_was_notified, location_id, project_id))
+                print (notification)
+                print ("notification "+ cursor.statusmessage)
+                log_lines += notification + "\n"
+                #notify
+
             conn.commit()
         
         ##notify out of delivery
@@ -301,7 +341,7 @@ while True:
             out_of_delivery_route ="""select location_name, location_id from visits where 
             project_id='{}'
             and vehicle_id='{}'
-            and status is NULL            and arrival_time <= '{}'
+            and status is NULL and arrival_time <= '{}'
             and (notified_out_of_delivery!= TRUE or notified_out_of_delivery is NULL)
                 order by arrival_time asc
                 """.format(project_id,
@@ -312,15 +352,63 @@ while True:
             for visit in out_of_delivery_visits:
                 visit_name = visit[0]
                 location_id = visit[1]
-                notification = "Notificación "+str(visit_name)+ ": Su pedido llegará en los próximos "+ str(window_minutes) + " minutos"
+                notification = str(datetime.datetime.now().time())+ "\t"+visit_name +"\tSu pedido llegará en los próximos "+ str(window_minutes) + " minutos"
                 visit_was_notified = True
                 query = "Update visits set notified_out_of_delivery=%s where location_id =%s and vehicle_id =%s and project_id = %s;"
                 cursor.execute(query, (visit_was_notified, location_id, vehicle_id, project_id))
                 print( notification)
-                log.write(notification + "\n")
-                pass
+                log_lines += notification + "\n"
             
             conn.commit()
         pass
+
+        #notify the completed visits
+        completed_visits_query = """Select location_name, vi.phone_number as phone, location_id, status from visits vi, vehicles ve 
+        where vi.project_id=%s and vi.vehicle_id=%s and (vi.status='done' or vi.status='skipped')
+        and vi.vehicle_id=ve.id and vi.location_id!=ve.start_location_id and vi.location_id!=ve.end_location_id and vi.is_break!=TRUE
+        and (notified_completed!=TRUE or notified_completed is NULL) """
+        args = (project_id, vehicle_id)
+        cursor.execute(completed_visits_query, args)
+        completed_visits = cursor.fetchall()
+        if cursor.rowcount>0:
+            print ("Notifying completed")
+        for visit in completed_visits:
+            location_name = visit.location_name
+            phone = visit.phone
+            location_id = visit.location_id
+            status = visit.status
+            visit_was_notified = True
+            update_query = "Update visits set notified_completed=%s where project_id = %s and vehicle_id=%s and location_id=%s"
+            args = (visit_was_notified, project_id, vehicle_id, location_id)
+            cursor.execute(update_query, args)
+
+            notification = str(datetime.datetime.now().time()) + " \t "+location_name+" \t Su pedido ha sido "+ status
+            print (notification)
+            print ("notification completed "+ cursor.statusmessage)
+            log_lines += notification + "\n"
+
+        ##notify cancelled
+        cancelled_visits_query = """Select * from visits where
+        vehicle_id is null and project_id=%s 
+        and is_vehicle_start_location = FALSE and is_vehicle_end_location=FALSE and is_break = FALSE 
+        and (notified_cancelled = FALSE or notified_cancelled is NULL) and (notified_planned_delivery = TRUE)"""
+        args = (project_id,)
+        cursor.execute(cancelled_visits_query, args)
+        cancelled_visits = cursor.fetchall()
+        for visit in cancelled_visits:
+            visit_name = visit.location_name
+            location_id = visit.location_id
+            visit_was_notified = True
+            update_query ="Update visits set notified_cancelled=%s where project_id=%s and location_id= %s"
+            args = (visit_was_notified, project_id, location_id)
+            cursor.execute(update_query, args)
+
+            notification = "{} \t {} \t Su pedido ha sido cancelado".format(datetime.datetime.now().time(), visit_name )
+            print (notification)
+            log_lines +=notification + "\n"
     
-log.close()
+    conn.commit()
+    
+    log = open('notifications.log', 'a')
+    log.write(log_lines)
+    log.close()
