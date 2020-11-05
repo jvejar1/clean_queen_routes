@@ -53,15 +53,18 @@ create table  visits(
 );
 
 create table if not exists notifications(
-    project_id text references projects(id),
-    location_id text,
-    created_at timestamp,
-    notification_type text
+    visit_id int references visits(id),
+    vehicle_id text,
+    notification_type text,
+    arrival_time time,
+    expect_from time,
+    expect_until time,
+    created_at timestamp default NOW()
 );
 
 create table if not exists custom_notes(
     int bigserial,
-    visit_id bigserial references visits(id),
+    visit_id text,
     field_key text,
     field_value text
 );
@@ -76,6 +79,6 @@ create table vehicle_capacities (
 	vehicle_id text references vehicles(id),
 	capacity_type text,
 	capacity_number integer
-)
+);
 
 

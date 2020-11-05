@@ -13,14 +13,98 @@ headers = {'content-type': 'application/json',
             'Authorization': 'bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI1ZTc3ZTdiZjgzYjc5ODAwMTcxZWE1ZjYiLCJpYXQiOjE2MDI1OTM3MTV9.2kTMhN8iUMkSiVwJsJdgtphuEdPVBYvh5eVsX5IOV9k'}
 
 r= requests.get(url, headers=headers)
-
+class NotificationType:
+    CANCELLED = 'cancelled'
+    COMPLETED = 'completed'
+    OUT_OF_DELIVERY = 'out_of_delivery'
+    PLANNED_DELIVERY = 'planned_delivery'
 
 class Model():
     conn = None
     cursor = None
-    def __init__(self):
-       
+    def __init__(self, conn, cursor):
+        self.conn = conn
+        self.cursor = cursor
+      
+
+    
+    def insert_notification(self, visit_id, notification_type, arrival_time, expect_from = None, expect_until= None):
+        query = """
+        Insert into notifications(visit_id, notification_type, arrival_time, expect_from, expect_until)
+        values (%s,%s,%s, %s,%s)
+        """
+        args = (visit_id, notification_type, arrival_time, expect_from, expect_until)
+        self.cursor.execute(query, args)
+        self.conn.commit()
+
+    def get_notifications(self, visit_id):
+        query = """
+        Select * from notifications 
+        where visit_id=%s;
+        """
+        args = (visit_id,)
+        self.cursor.execute(query, args)
+        return self.cursor.fetchall()
+
+    
+    def get_today_routes_ids(self):
+        today_routes_ids = """
+        select v.project_id, v.vehicle_id 
+        from visits v, projects p 
+        where p.id=v.project_id 
+        and p.project_date=%s 
+            group by v.project_id, v.vehicle_id"""
+
+        today = datetime.datetime.now().date()
+        args = (today,)
+        self.cursor.execute(today_routes_ids, args)     
+        routes_ids = self.cursor.fetchall()
+        return routes_ids
+        
+    def route_has_been_started(self, route_id):
+        project_id = route_id.project_id
+        vehicle_id = route_id.vehicle_id
+        query = "select * from visits where project_id='{}' and vehicle_id='{}' and status='done' order by arrival_time asc limit 1".format(project_id, vehicle_id)
+        self.cursor.execute(query)
+        route_has_been_started = self.cursor.fetchone()
+        if (route_has_been_started):
+            return True
+        else:
+            return False
+            
+    def early_planned_deliveries_not_notified(self, route_id):
         pass
+
+    def get_planned_deliveries_not_notified(self, route_id, early_visits_time_until):
+        project_id = route_id.project_id
+        vehicle_id = route_id.vehicle_id
+        visits_to_notify_query = """select vi.id as id, location_name, arrival_time, location_id from visits vi, vehicles ve
+                where vi.project_id = %s 
+                and vi.vehicle_id=%s 
+                and (vi.status!='done' or vi.status is NULL) 
+                and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
+                and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
+                and vi.is_break!=TRUE and vi.arrival_time >= %s
+                    order by arrival_time asc;
+                """
+
+        args = (project_id, vehicle_id, early_visits_time_until)
+        
+        
+        cursor.execute(visits_to_notify_query, args)
+        visits_to_notify = cursor.fetchall()
+        return visits_to_notify
+        
+
+    def get_out_of_delivery_visits_not_notified(self, route_id):
+        pass
+    
+    def get_completed_visits_not_notified(self, route_id):
+        pass
+
+    def get_cancelled_visits_not_notified(self, project_id):
+        pass
+    
     def sync_data(self,conn, cursor):
 
         url = 'https://api.routific.com/product/projects/'
@@ -137,6 +221,7 @@ class Model():
                     is_vehicle_end_location = False if vehicle['end-location']==None else location_id == vehicle['end-location']['id']
 
                     #insert or update: the visit can be in the project but in another vehicle
+                    visit_id = location_id
                     query = """Select * from visits 
                     where (location_id = %s and project_id = %s) and (is_break=FALSE or (is_break=TRUE and vehicle_id=%s))"""
                     cursor.execute(query,(location_id, project_id, vehicle_id))
@@ -210,205 +295,214 @@ class Model():
 
     def get_today_routes(self, conn, cursor):
         pass
+
+
 class Notifier():
     def notify(self, order_id):
         pass
 
 #events_file = open('event_jsons.txt') 
-conn = None
-cursor = None
-conn = psycopg2.connect(
+
+if __name__ == "__main__":
+    conn = None
+    cursor = None
+    conn = psycopg2.connect(
     host="localhost",
     database="clean_queen_routes",
     user="postgres",
     password="postgres",
     cursor_factory=NamedTupleCursor)
-cursor = conn.cursor()
+    cursor = conn.cursor()
+    model = Model(conn=conn, cursor = cursor)
 
-model = Model()
-
-while True:
-    model.sync_data(conn, cursor)
-
-    log_lines = ""
-    #a route is identified by a project_id and a vehicle_id
-    today_routes_ids = """
-    select v.project_id, v.vehicle_id 
-    from visits v, projects p 
-    where p.id=v.project_id 
-    and p.project_date=%s 
-        group by v.project_id, v.vehicle_id"""
-
-    today = datetime.datetime.now().date()
-    args = (today,)
-    cursor.execute(today_routes_ids, args)     
-    routes_ids = cursor.fetchall()
-    planned_delivery_notification_window = 90
-    early_visits_time_until = datetime.datetime.now() + datetime.timedelta(minutes = planned_delivery_notification_window)
-    early_visits_time_until = early_visits_time_until.time()
-    now_time = datetime.datetime.now().time()
-
-    for route_id in routes_ids:
-        project_id = route_id[0]
-        vehicle_id = route_id[1]
-        #notify planned delivery
-        route_has_been_started_query = "select * from visits where project_id='{}' and vehicle_id='{}' and status='done' order by arrival_time asc limit 1".format(project_id, vehicle_id)
-        cursor.execute(route_has_been_started_query)
-        route_has_been_started = cursor.fetchone()
-        if route_has_been_started:
-        #notify the userssssss
-            visits_to_notify_query = """select location_name, arrival_time, location_id from visits vi, vehicles ve
-            where vi.project_id = %s 
-            and vi.vehicle_id=%s 
-            and (vi.status!='done' or vi.status is NULL) 
-            and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
-            and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
-            and vi.is_break!=TRUE and vi.arrival_time >= %s
-                order by arrival_time asc;
-            """
-            args = (project_id, vehicle_id, early_visits_time_until)
-
-            try:
-                cursor.execute(visits_to_notify_query, args)
-                visits_to_notify = cursor.fetchall()
-            except Exception:
-                conn.rollback()
-                print("Exception in ", cursor.query)
-            
-            for visit_to_notify in visits_to_notify:
-                visit_arrival_time = visit_to_notify[1]
-                visit_id = visit_to_notify[2]
-                today = datetime.datetime.today()
-                notification_arrival_from = datetime.datetime.combine(today,visit_arrival_time) - datetime.timedelta(minutes = planned_delivery_notification_window)
-                notification_arrival_until = datetime.datetime.combine(today,visit_arrival_time) + datetime.timedelta(minutes = planned_delivery_notification_window)
-                                
-                #set the visit as notificated
-                visit_was_notified = True
-                update_visit_query = "Update visits set notified_planned_delivery=%s where location_id=%s and project_id=%s;"            
-                cursor.execute(update_visit_query, (visit_was_notified, visit_id, project_id))
-
-                notification = str(datetime.datetime.now().time())+ " \t "+ (visit_to_notify[0]) + "\t Ha salido un vehículo con su pedido y llegará llegará entre "+str(notification_arrival_from.time()) +" y "+ str(notification_arrival_until.time())
-                print ("notification "+ cursor.statusmessage)
-                print (notification)
-                log_lines += notification + "\n"
-            
-            early_visits_to_notify_query = """ select location_name, arrival_time, location_id from visits vi, vehicles ve
-            where vi.project_id=%s 
-            and vi.vehicle_id=%s 
-            and (vi.status!='done' or vi.status is NULL) 
-            and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
-            and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
-            and vi.is_break!=TRUE and vi.arrival_time <=%s
-                order by arrival_time asc"""
-            args = (project_id, vehicle_id, early_visits_time_until)
-            cursor.execute(early_visits_to_notify_query, args)
-            early_visits = cursor.fetchall()
-            for visit in early_visits:
-                location_name = visit.location_name
-                location_id = visit.location_id
-                notification = str(datetime.datetime.now().time())+ " \t {} \t Ha salido un vehículo con su pedido y llegará pronto".format(location_name)
-
-                #update the visit
-                visit_was_notified = True
-                update_query = "Update visits set notified_out_of_delivery=%s, notified_planned_delivery=%s where location_id = %s and project_id=%s"
-                cursor.execute(update_query, (visit_was_notified, visit_was_notified, location_id, project_id))
-                print (notification)
-                print ("notification "+ cursor.statusmessage)
-                log_lines += notification + "\n"
-                #notify
-
-            conn.commit()
+    while True:
+        model.sync_data(conn, cursor)
+        log_lines = ""
+        #a route is identified by a project_id and a vehicle_id
         
-        ##notify out of delivery
-        window_minutes = 90
-        now_time = datetime.datetime.now().time().strftime("%H:%M:%S")
-        late_visits_query ="""select * from visits where 
-        project_id='{}'
-        and vehicle_id='{}'
-        and (status is NULL or status!='done')
-        and arrival_time <= '{}'
-            order by arrival_time asc;
-            """.format(project_id,
-                        vehicle_id,
-                        now_time)
-        cursor.execute (late_visits_query)
-        late_visits = cursor.fetchall()
-        if not late_visits:
-            #notify the out of delivery visits
+        today_routes = model.get_today_routes_ids()
 
-            max_time = datetime.datetime.now() + datetime.timedelta(minutes=window_minutes*.70)
-            max_time = max_time.time().strftime("%H:%M:%S")
-            out_of_delivery_route ="""select location_name, location_id from visits where 
+        planned_delivery_notification_window = 90
+        early_visits_time_until = datetime.datetime.now() + datetime.timedelta(minutes = planned_delivery_notification_window)
+        early_visits_time_until = early_visits_time_until.time()
+        
+        now_time = datetime.datetime.now().time()
+
+        for route in today_routes:
+            vehicle_id = route.vehicle_id
+            project_id = route.project_id
+
+            if model.route_has_been_started(route):
+                #notify the users    
+                
+                early_visits_to_notify_query = """ select location_name, arrival_time, location_id, vi.id as id from visits vi, vehicles ve
+                where vi.project_id=%s 
+                and vi.vehicle_id=%s 
+                and (vi.status!='done' or vi.status is NULL) 
+                and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
+                and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
+                and vi.is_break!=TRUE and vi.arrival_time <=%s
+                    order by arrival_time asc"""
+                args = (project_id, vehicle_id, early_visits_time_until)
+                cursor.execute(early_visits_to_notify_query, args)
+                early_visits = cursor.fetchall()
+                for visit in early_visits:
+                    arrival_time = visit.arrival_time
+                    visit_id = visit.id
+                    location_name = visit.location_name
+                    location_id = visit.location_id
+                    notification = str(datetime.datetime.now().time())+ " \t {} \t Ha salido un vehículo con su pedido y llegará pronto".format(location_name)
+
+                    #update the visit
+                    visit_was_notified = True
+                    update_query = "Update visits set notified_out_of_delivery=%s, notified_planned_delivery=%s where location_id = %s and project_id=%s"
+                    cursor.execute(update_query, (visit_was_notified, visit_was_notified, location_id, project_id))
+                    
+                    insert_notification_query = "Insert into notifications"
+                    print (notification)
+                    print ("notification "+ cursor.statusmessage)
+
+
+                    model.insert_notification(visit_id = visit_id, arrival_time = arrival_time, notification_type = NotificationType.OUT_OF_DELIVERY)
+                    log_lines += notification + "\n"
+                    #notify
+
+                conn.commit()
+
+                visits_to_notify = model.get_planned_deliveries_not_notified(route, early_visits_time_until)
+                for visit_to_notify in visits_to_notify:
+                    visit_id = visit_to_notify.id
+                    visit_arrival_time = visit_to_notify.arrival_time
+                    location_id = visit_to_notify.location_id
+                    location_name = visit_to_notify.location_name
+                    today = datetime.datetime.today()
+                    expect_from = datetime.datetime.combine(today,visit_arrival_time) - datetime.timedelta(minutes = planned_delivery_notification_window)
+                    expect_until = datetime.datetime.combine(today,visit_arrival_time) + datetime.timedelta(minutes = planned_delivery_notification_window)
+                    #set the visit as notificated
+                    visit_was_notified = True
+                    update_visit_query = "Update visits set notified_planned_delivery=%s where location_id=%s and project_id=%s;"            
+                    cursor.execute(update_visit_query, (visit_was_notified, location_id, project_id))
+
+                    notification = str(datetime.datetime.now().time())+ " \t "+ (location_name) + "\t Ha salido un vehículo con su pedido y llegará llegará entre "+str(expect_from.time()) +" y "+ str(expect_until.time())
+                    print ("notification "+ cursor.statusmessage)
+                    print (notification)
+
+                    model.insert_notification(
+                        visit_id = visit_id,
+                        notification_type = NotificationType.PLANNED_DELIVERY,
+                        arrival_time = visit_arrival_time,
+                        expect_from=expect_from.time(),
+                        expect_until = expect_until.time()
+                        )
+                    log_lines += notification + "\n"
+                
+            
+            ##notify out of delivery
+            window_minutes = 90
+            now_time = datetime.datetime.now().time().strftime("%H:%M:%S")
+            late_visits_query ="""select * from visits where 
             project_id='{}'
             and vehicle_id='{}'
-            and status is NULL and arrival_time <= '{}'
-            and (notified_out_of_delivery!= TRUE or notified_out_of_delivery is NULL)
-                order by arrival_time asc
+            and (status is NULL or status!='done')
+            and arrival_time <= '{}'
+                order by arrival_time asc;
                 """.format(project_id,
                             vehicle_id,
-                            max_time)
-            cursor.execute (out_of_delivery_route)
-            out_of_delivery_visits = cursor.fetchall()
-            for visit in out_of_delivery_visits:
-                visit_name = visit[0]
-                location_id = visit[1]
-                notification = str(datetime.datetime.now().time())+ "\t"+visit_name +"\tSu pedido llegará en los próximos "+ str(window_minutes) + " minutos"
+                            now_time)
+            cursor.execute (late_visits_query)
+            late_visits = cursor.fetchall()
+            if not late_visits:
+                #notify the out of delivery visits
+                expect_until = datetime.datetime.now() + datetime.timedelta(minutes=window_minutes)
+                expect_until = expect_until.time()
+                max_time = datetime.datetime.now() + datetime.timedelta(minutes=window_minutes*.70)
+                max_time = max_time.time().strftime("%H:%M:%S")
+                out_of_delivery_route ="""select location_name, location_id, id, arrival_time from visits where 
+                project_id='{}'
+                and vehicle_id='{}'
+                and status is NULL and arrival_time <= '{}'
+                and (notified_out_of_delivery!= TRUE or notified_out_of_delivery is NULL)
+                    order by arrival_time asc
+                    """.format(project_id,
+                                vehicle_id,
+                                max_time)
+                cursor.execute (out_of_delivery_route)
+                out_of_delivery_visits = cursor.fetchall()
+                for visit in out_of_delivery_visits:
+                    visit_id = visit.id
+                    visit_name = visit[0]
+                    arrival_time = visit.arrival_time
+                    location_id = visit[1]
+                    notification = str(datetime.datetime.now().time())+ "\t"+visit_name +"\tSu pedido llegará en los próximos "+ str(window_minutes) + " minutos"
+                    visit_was_notified = True
+                    query = "Update visits set notified_out_of_delivery=%s where location_id =%s and vehicle_id =%s and project_id = %s;"
+                    cursor.execute(query, (visit_was_notified, location_id, vehicle_id, project_id))
+                    print( notification)
+
+                    model.insert_notification(
+                        visit_id = visit_id, 
+                        notification_type = NotificationType.OUT_OF_DELIVERY, 
+                        arrival_time = arrival_time, 
+                        expect_from =now_time,
+                        expect_until = expect_until )
+                    log_lines += notification + "\n"
+                
+                conn.commit()
+            pass
+
+            #notify the completed visits
+            completed_visits_query = """Select location_name, vi.phone_number as phone, location_id, status, arrival_time, vi.id as id from visits vi, vehicles ve 
+            where vi.project_id=%s and vi.vehicle_id=%s and (vi.status='done' or vi.status='skipped')
+            and vi.vehicle_id=ve.id and vi.location_id!=ve.start_location_id and vi.location_id!=ve.end_location_id and vi.is_break!=TRUE
+            and (notified_completed!=TRUE or notified_completed is NULL) """
+            args = (project_id, vehicle_id)
+            cursor.execute(completed_visits_query, args)
+            completed_visits = cursor.fetchall()
+            if cursor.rowcount>0:
+                print ("Notifying completed")
+            for visit in completed_visits:
+                visit_id = visit.id
+                arrival_time = visit.arrival_time
+                location_name = visit.location_name
+                phone = visit.phone
+                location_id = visit.location_id
+                status = visit.status
                 visit_was_notified = True
-                query = "Update visits set notified_out_of_delivery=%s where location_id =%s and vehicle_id =%s and project_id = %s;"
-                cursor.execute(query, (visit_was_notified, location_id, vehicle_id, project_id))
-                print( notification)
+                update_query = "Update visits set notified_completed=%s where project_id = %s and vehicle_id=%s and location_id=%s"
+                args = (visit_was_notified, project_id, vehicle_id, location_id)
+                cursor.execute(update_query, args)
+
+                notification = str(datetime.datetime.now().time()) + " \t "+location_name+" \t Su pedido ha sido "+ status
+                print (notification)
+                print ("notification completed "+ cursor.statusmessage)
+                model.insert_notification(visit_id = visit_id, arrival_time = arrival_time, notification_type = NotificationType.COMPLETED)
+
                 log_lines += notification + "\n"
-            
-            conn.commit()
-        pass
 
-        #notify the completed visits
-        completed_visits_query = """Select location_name, vi.phone_number as phone, location_id, status from visits vi, vehicles ve 
-        where vi.project_id=%s and vi.vehicle_id=%s and (vi.status='done' or vi.status='skipped')
-        and vi.vehicle_id=ve.id and vi.location_id!=ve.start_location_id and vi.location_id!=ve.end_location_id and vi.is_break!=TRUE
-        and (notified_completed!=TRUE or notified_completed is NULL) """
-        args = (project_id, vehicle_id)
-        cursor.execute(completed_visits_query, args)
-        completed_visits = cursor.fetchall()
-        if cursor.rowcount>0:
-            print ("Notifying completed")
-        for visit in completed_visits:
-            location_name = visit.location_name
-            phone = visit.phone
-            location_id = visit.location_id
-            status = visit.status
-            visit_was_notified = True
-            update_query = "Update visits set notified_completed=%s where project_id = %s and vehicle_id=%s and location_id=%s"
-            args = (visit_was_notified, project_id, vehicle_id, location_id)
-            cursor.execute(update_query, args)
+            ##notify cancelled
+            cancelled_visits_query = """Select * from visits where
+            vehicle_id is null and project_id=%s 
+            and is_vehicle_start_location = FALSE and is_vehicle_end_location=FALSE and is_break = FALSE 
+            and (notified_cancelled = FALSE or notified_cancelled is NULL) and (notified_planned_delivery = TRUE)"""
+            args = (project_id,)
+            cursor.execute(cancelled_visits_query, args)
+            cancelled_visits = cursor.fetchall()
+            for visit in cancelled_visits:
+                visit_name = visit.location_name
+                location_id = visit.location_id
+                visit_was_notified = True
+                update_query ="Update visits set notified_cancelled=%s where project_id=%s and location_id= %s"
+                args = (visit_was_notified, project_id, location_id)
+                cursor.execute(update_query, args)
 
-            notification = str(datetime.datetime.now().time()) + " \t "+location_name+" \t Su pedido ha sido "+ status
-            print (notification)
-            print ("notification completed "+ cursor.statusmessage)
-            log_lines += notification + "\n"
+                notification = "{} \t {} \t Su pedido ha sido cancelado".format(datetime.datetime.now().time(), visit_name )
+                print (notification)
+                model.insert_notification(visit_id = visit_id, arrival_time = None, notification_type = NotificationType.CANCELLED)
 
-        ##notify cancelled
-        cancelled_visits_query = """Select * from visits where
-        vehicle_id is null and project_id=%s 
-        and is_vehicle_start_location = FALSE and is_vehicle_end_location=FALSE and is_break = FALSE 
-        and (notified_cancelled = FALSE or notified_cancelled is NULL) and (notified_planned_delivery = TRUE)"""
-        args = (project_id,)
-        cursor.execute(cancelled_visits_query, args)
-        cancelled_visits = cursor.fetchall()
-        for visit in cancelled_visits:
-            visit_name = visit.location_name
-            location_id = visit.location_id
-            visit_was_notified = True
-            update_query ="Update visits set notified_cancelled=%s where project_id=%s and location_id= %s"
-            args = (visit_was_notified, project_id, location_id)
-            cursor.execute(update_query, args)
-
-            notification = "{} \t {} \t Su pedido ha sido cancelado".format(datetime.datetime.now().time(), visit_name )
-            print (notification)
-            log_lines +=notification + "\n"
-    
-    conn.commit()
-    
-    log = open('notifications.log', 'a')
-    log.write(log_lines)
-    log.close()
+                log_lines +=notification + "\n"
+        
+        conn.commit()
+        
+        log = open('notifications.log', 'a')
+        log.write(log_lines)
+        log.close()
