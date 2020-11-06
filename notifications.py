@@ -4,7 +4,6 @@ import sys
 import datetime
 import time
 import array as arr
-import numpy as np
 import json
 import requests
 from psycopg2.extras import NamedTupleCursor
@@ -352,17 +351,17 @@ if __name__ == "__main__":
 
             for visit in visits:
                 #notify planned delivery
-                
+                now_time =  now_dt.time()
                 last_notification = model.get_last_notification(visit)
                 visit_is_not_completed = visit.status != 'done' and visit.status !='skipped'
-                now_time =  now_dt.time()
+                
 
                 visit_are_late_for_customer= last_notification and (last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.OUT_OF_DELIVERY) and last_notification.expect_until < now_time
 
                 #check if is out of delivery or an early visit
                 out_of_delivery_dt_bound = now_dt + datetime.timedelta(minutes =out_of_delivery_minutes_bound * 0.7)
                 is_out_of_delivery = visit.arrival_time < out_of_delivery_dt_bound.time()
-                if (not route_is_late) and routes_has_been_started and visit_is_not_completed and is_out_of_delivery and ((not last_notification) or last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.CANCELLED):
+                if (not route_is_late) and route_has_been_started and visit_is_not_completed and is_out_of_delivery and ((not last_notification) or last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.CANCELLED):
                     expect_from = now_dt
                     expect_until = now_dt + datetime.timedelta(minutes = out_of_delivery_minutes_bound)
                     
@@ -376,9 +375,11 @@ if __name__ == "__main__":
                     pass
                 
                 #check if is planned_delivery
-                if (not route_is_late) and routes_has_been_started and visit_is_not_completed and ((not last_notification) or last_notification.notification_type == NotificationType.CANCELLED):
+                last_notification = model.get_last_notification(visit)
+                visit_is_in_the_future = visit.arrival_time > now_time
+                if route_has_been_started and (not route_is_late) and visit_is_in_the_future and visit_is_not_completed and ((not last_notification) or last_notification.notification_type == NotificationType.CANCELLED):
                     expect_from = datetime.datetime.combine(now_dt,visit.arrival_time) - datetime.timedelta(minutes = planned_delivery_notification_window)
-                    expect_from = min(expect_from, now_dt + datetime.timedelta(minutes=7))
+                    expect_from = max(expect_from, now_dt + datetime.timedelta(minutes=7))
 
                     expect_until = datetime.datetime.combine(now_dt,visit.arrival_time) + datetime.timedelta(minutes = planned_delivery_notification_window)
                     
@@ -392,6 +393,7 @@ if __name__ == "__main__":
                     
                 
                 #notification completed
+                last_notification = model.get_last_notification(visit)
                 visit_is_completed = visit.status == 'done' or visit.status == 'skipped'
                 if visit_is_completed and ((not last_notification) or last_notification.notification_type != NotificationType.COMPLETED):
                     model.insert_notification(
