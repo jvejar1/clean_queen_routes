@@ -47,7 +47,7 @@ class Model():
     def get_last_notification(self, visit):
         query = """
         select * from notifications
-        where visit_id = %s order by created_at asc limit 1
+        where visit_id = %s order by created_at desc limit 1
         """
         args = (visit.id,)
         self.cursor.execute(query, args)
@@ -62,6 +62,14 @@ class Model():
         self.cursor.execute(query, args)
         visits = self.cursor.fetchall()
         return visits
+
+    def get_vehicle(self, route):
+        vehicle_id = route.vehicle_id
+        query = "Select * from vehicles where id = %s"
+        args = (vehicle_id,)
+        self.cursor.execute(query, args)
+        vehicle = self.cursor.fetchone()
+        return vehicle
 
     def get_today_cancelled_visits(self):
         query = """Select v.* from visits v, projects p 
@@ -90,7 +98,9 @@ class Model():
     def route_is_late(self, route):
         project_id = route.project_id
         vehicle_id = route.vehicle_id
-        now_time = datetime.datetime.now().time()
+        allowed_lateness_minutes = 5
+
+        critical_datetime = datetime.datetime.now() - datetime.timedelta(minutes = allowed_lateness_minutes)
         late_visits_query ="""select * from visits where 
             project_id='{}'
             and vehicle_id='{}'
@@ -99,14 +109,14 @@ class Model():
                 order by arrival_time asc;
                 """.format(project_id,
                             vehicle_id,
-                            now_time)
+                            critical_datetime.time())
         self.cursor.execute (late_visits_query)
         late_visits = self.cursor.fetchall()
 
-        if len(late_visits) == 0:
-            return False
-        else:
+        if late_visits:
             return True
+        else:
+            return False
 
     def route_has_been_started(self, route_id):
         project_id = route_id.project_id
@@ -304,11 +314,6 @@ class Model():
         conn.commit()
         pass
 
-  
-
-class Utility():
-    pass
-
 #events_file = open('event_jsons.txt') 
 
 if __name__ == "__main__":
@@ -333,7 +338,7 @@ if __name__ == "__main__":
         
         planned_delivery_notification_window = 70
         out_of_delivery_minutes_bound = 30
-        early_visits_dt_bound = now_dt + datetime.timedelta(minutes = planned_delivery_notification_window)
+        early_visits_dt_bound = now_dt + datetime.timedelta(minutes = out_of_delivery_minutes_bound)
         early_visits_time_bound = early_visits_dt_bound.time()
                     
         for route in today_routes:
@@ -355,9 +360,9 @@ if __name__ == "__main__":
                 visit_are_late_for_customer= last_notification and (last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.OUT_OF_DELIVERY) and last_notification.expect_until < now_time
 
                 #check if is out of delivery or an early visit
-                out_of_delivery_dt_bound = now_dt + datetime.timedelta(out_of_delivery_minutes_bound * 0.7)
+                out_of_delivery_dt_bound = now_dt + datetime.timedelta(minutes =out_of_delivery_minutes_bound * 0.7)
                 is_out_of_delivery = visit.arrival_time < out_of_delivery_dt_bound.time()
-                if (not route_is_late) and visit_is_not_completed and is_out_of_delivery and ((not last_notification) or last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.CANCELLED):
+                if (not route_is_late) and routes_has_been_started and visit_is_not_completed and is_out_of_delivery and ((not last_notification) or last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.CANCELLED):
                     expect_from = now_dt
                     expect_until = now_dt + datetime.timedelta(minutes = out_of_delivery_minutes_bound)
                     
@@ -371,10 +376,10 @@ if __name__ == "__main__":
                     pass
                 
                 #check if is planned_delivery
-                if (not route_is_late) and visit_is_not_completed and ((not last_notification) or last_notification.notification_type == NotificationType.CANCELLED):
+                if (not route_is_late) and routes_has_been_started and visit_is_not_completed and ((not last_notification) or last_notification.notification_type == NotificationType.CANCELLED):
                     expect_from = datetime.datetime.combine(now_dt,visit.arrival_time) - datetime.timedelta(minutes = planned_delivery_notification_window)
                     expect_from = min(expect_from, now_dt + datetime.timedelta(minutes=7))
-                    
+
                     expect_until = datetime.datetime.combine(now_dt,visit.arrival_time) + datetime.timedelta(minutes = planned_delivery_notification_window)
                     
                     model.insert_notification(
@@ -388,7 +393,7 @@ if __name__ == "__main__":
                 
                 #notification completed
                 visit_is_completed = visit.status == 'done' or visit.status == 'skipped'
-                if visit_is_completed and (not last_notification or last_notification.notification_type != NotificationType.COMPLETED):
+                if visit_is_completed and ((not last_notification) or last_notification.notification_type != NotificationType.COMPLETED):
                     model.insert_notification(
                         visit_id = visit.id,
                         notification_type = NotificationType.COMPLETED,
