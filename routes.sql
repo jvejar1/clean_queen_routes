@@ -54,6 +54,10 @@ create table  visits(
 
 create table if not exists notifications(
     visit_id int references visits(id),
+    visit_name text,
+    project_name text,
+    project_id text,
+    vehicle_name text,
     vehicle_id text,
     notification_type text,
     arrival_time time,

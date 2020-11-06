@@ -25,12 +25,25 @@ class Model():
         self.conn = conn
         self.cursor = cursor
     
-    def insert_notification(self, visit_id, notification_type, arrival_time, expect_from = None, expect_until= None):
+    def insert_notification(self, visit, notification_type, arrival_time, expect_from = None, expect_until= None):
+        project = self.get_project(visit)
+        vehicle = self.get_vehicle(visit)
         query = """
-        Insert into notifications(visit_id, notification_type, arrival_time, expect_from, expect_until)
-        values (%s,%s,%s, %s,%s)
+        Insert into notifications
+        (visit_id, visit_name, project_name, project_id, vehicle_name, vehicle_id, notification_type, arrival_time, expect_from, expect_until)
+        values (%s,%s,%s, %s,%s,%s,%s,%s,%s,%s)
         """
-        args = (visit_id, notification_type, arrival_time, expect_from, expect_until)
+        args = (
+            visit.id,
+            visit.location_name,
+            project.name,
+            project.id,
+            vehicle.name,
+            vehicle.id,
+            notification_type,
+            arrival_time,
+            expect_from,
+            expect_until)
         self.cursor.execute(query, args)
         self.conn.commit()
 
@@ -61,6 +74,14 @@ class Model():
         self.cursor.execute(query, args)
         visits = self.cursor.fetchall()
         return visits
+
+    def get_project (self, visit):
+        project_id = visit.project_id
+        query = "Select * from projects where id = %s"
+        args = (visit.project_id,)
+        self.cursor.execute(query, args)
+        project = self.cursor.fetchone()
+        return project
 
     def get_vehicle(self, route):
         vehicle_id = route.vehicle_id
@@ -366,7 +387,7 @@ if __name__ == "__main__":
                     expect_until = now_dt + datetime.timedelta(minutes = out_of_delivery_minutes_bound)
                     
                     model.insert_notification(
-                        visit_id = visit.id,
+                        visit = visit,
                         notification_type = NotificationType.OUT_OF_DELIVERY,
                         arrival_time = visit.arrival_time,
                         expect_from=expect_from.time(),
@@ -384,7 +405,7 @@ if __name__ == "__main__":
                     expect_until = datetime.datetime.combine(now_dt,visit.arrival_time) + datetime.timedelta(minutes = planned_delivery_notification_window)
                     
                     model.insert_notification(
-                        visit_id = visit.id,
+                        visit = visit,
                         notification_type = NotificationType.PLANNED_DELIVERY,
                         arrival_time = visit.arrival_time,
                         expect_from=expect_from.time(),
@@ -397,7 +418,7 @@ if __name__ == "__main__":
                 visit_is_completed = visit.status == 'done' or visit.status == 'skipped'
                 if visit_is_completed and ((not last_notification) or last_notification.notification_type != NotificationType.COMPLETED):
                     model.insert_notification(
-                        visit_id = visit.id,
+                        visit= visit,
                         notification_type = NotificationType.COMPLETED,
                         arrival_time = visit.arrival_time,
                         expect_from= None,
@@ -416,7 +437,7 @@ if __name__ == "__main__":
             last_notification = model.get_last_notification(visit)
             if last_notification and (last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.OUT_OF_DELIVERY):
                 model.insert_notification(
-                        visit_id = visit.id,
+                        visit = visit,
                         notification_type = NotificationType.CANCELLED,
                         arrival_time = visit.arrival_time,
                         expect_from= None,
