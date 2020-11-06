@@ -171,7 +171,17 @@ class Model():
         cursor.execute(visits_to_notify_query, args)
         visits_to_notify = cursor.fetchall()
         return visits_to_notify
-          
+
+    def parse_and_limit_time(self, time_str):
+        max_time = datetime.time.max
+        if time_str:
+            try:
+                parsed_time = datetime.datetime.strptime(time_str, "%H:%M").time()
+            except ValueError as e:
+                parsed_time = max_time
+            return parsed_time
+    
+
     def sync_data(self,conn, cursor):
 
         url = 'https://api.routific.com/product/projects/'
@@ -193,6 +203,7 @@ class Model():
                 query = "Insert into projects(id, name, project_date) values('{}','{}','{}')".format(project_id, project_name, project_date)
             cursor.execute(query)
 
+        conn.commit()
         
         #sync the routes for each projects
         for i,_ in enumerate(projects):
@@ -267,6 +278,15 @@ class Model():
                     finish_time = visit['finish_time'] if 'finish_time' in visit else arrival_time #first and last visit(driver) do not 
                     expected_arrival_time = visit['expected_arrival_time'] if 'expected_arrival_time' in visit else arrival_time
                     expected_finish_time = visit['expected_finish_time'] if 'expected_finish_time' in visit else finish_time
+                    
+                    #limit the time if is more than 23:59
+                    max_time = datetime.time.max
+                    
+                    arrival_time = self.parse_and_limit_time(arrival_time)
+                    finish_time = self.parse_and_limit_time(finish_time)
+                    expected_arrival_time = self.parse_and_limit_time(expected_arrival_time)
+                    expected_finish_time = self.parse_and_limit_time(expected_finish_time)
+                    
                     phone_number = visit['phone'] if 'phone' in visit else None
                     status = visit['status'] if 'status' in visit else None
                     notes = visit['notes'] if 'notes' in visit else None
