@@ -28,24 +28,37 @@ class Model():
     def insert_notification(self, visit, notification_type, arrival_time, expect_from = None, expect_until= None):
         project = self.get_project(visit)
         vehicle = self.get_vehicle(visit)
+
+        if not vehicle:
+            vehicle =self.get_last_valid_vehicle_for_cancelled_visit(visit)
+
         query = """
         Insert into notifications
-        (visit_id, visit_name, project_name, project_id, vehicle_name, vehicle_id, notification_type, arrival_time, expect_from, expect_until)
-        values (%s,%s,%s, %s,%s,%s,%s,%s,%s,%s)
+        (visit_id, vehicle_id, notification_type, arrival_time, expect_from, expect_until)
+        values (%s,%s,%s, %s,%s,%s)
         """
         args = (
             visit.id,
-            visit.location_name,
-            project.name,
-            project.id,
-            vehicle.name,
-            vehicle.id,
+            vehicle.id if vehicle else None,
             notification_type,
             arrival_time,
             expect_from,
             expect_until)
         self.cursor.execute(query, args)
         self.conn.commit()
+
+
+    def get_last_valid_vehicle_for_cancelled_visit(self, visit):
+        query = """
+        select ve.* 
+        from vehicles ve, visit_changes vc 
+        where vc.visit_id = %s and vc.old_vehicle_id=ve.id and vc.new_vehicle_id is NULL order by vc.created_at desc limit 1
+        """
+        args = (visit.id,)
+        self.cursor.execute(query, args)
+        vehicle = self.cursor.fetchone()
+        return vehicle
+
 
     def get_notifications(self, visit_id):
         query = """
@@ -69,7 +82,7 @@ class Model():
     def get_visits(self, route):
         vehicle_id = route.vehicle_id
         project_id = route.project_id
-        query = "Select * from visits where vehicle_id = %s and project_id = %s"
+        query = "Select * from visits where vehicle_id = %s and project_id = %s order by arrival_time asc;"
         args = (vehicle_id, project_id)
         self.cursor.execute(query, args)
         visits = self.cursor.fetchall()
@@ -173,7 +186,7 @@ class Model():
         return visits_to_notify
 
     def parse_and_limit_time(self, time_str):
-        max_time = datetime.time.max
+        max_time = datetime.time(hour = 23, minute= 59)
         if time_str:
             try:
                 parsed_time = datetime.datetime.strptime(time_str, "%H:%M").time()
@@ -346,8 +359,16 @@ class Model():
                     #print('visit ', cursor.statusmessage)
                     ids_of_served_visits.append(location_id)
 
-                unserved_visits_query = "update visits set vehicle_id=NULL where location_id not in %s and project_id=%s and vehicle_id=%s"
+                unserved_visits_query = "update visits set vehicle_id=NULL where location_id not in %s and project_id=%s and vehicle_id=%s returning id"
                 cursor.execute(unserved_visits_query, (tuple(ids_of_served_visits), project_id, vehicle_id))
+                if cursor.rowcount>0:
+                    print ("Visits that are no longer with {} ({}): {}".format(vehicle_name, project_name, cursor.rowcount))
+        
+                unserved_visits = cursor.fetchall()
+                visit_change_query = "Insert into visit_changes (visit_id, old_vehicle_id, new_vehicle_id) values (%s,%s,%s)"
+                args = map(lambda visit: (visit.id, vehicle_id, None), unserved_visits)         
+                cursor.executemany(visit_change_query, args)
+                
                 if cursor.rowcount>0:
                     print ("Visits that are no longer with {} ({}): {}".format(vehicle_name, project_name, cursor.rowcount))
                 

@@ -29,10 +29,10 @@ create table  visits(
     vehicle_id text references vehicles(id),
     
 	is_break boolean,
-    estimated_arrival_time time,
-    estimated_finish_time time,
-    arrival_time time,
-    finish_time time,
+    estimated_arrival_time time (0),
+    estimated_finish_time time (0),
+    arrival_time time (0),
+    finish_time time (0),
     status text,
     phone_number varchar(11),
     notes text,
@@ -52,17 +52,20 @@ create table  visits(
     notified_completed boolean
 );
 
+create table if not exists visit_changes(
+    visit_id integer references visits(id),
+    old_vehicle_id text,
+    new_vehicle_id text,
+    created_at timestamp default NOW()
+);
+
 create table if not exists notifications(
     visit_id int references visits(id),
-    visit_name text,
-    project_name text,
-    project_id text,
-    vehicle_name text,
     vehicle_id text,
     notification_type text,
-    arrival_time time,
-    expect_from time,
-    expect_until time,
+    arrival_time time (0),
+    expect_from time (0),
+    expect_until time (0),
     created_at timestamp default NOW()
 );
 
