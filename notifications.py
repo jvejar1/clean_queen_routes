@@ -32,10 +32,11 @@ class Model():
         if not vehicle:
             vehicle =self.get_last_valid_vehicle_for_cancelled_visit(visit)
 
+        now_datetime = datetime.datetime.now()
         query = """
         Insert into notifications
-        (visit_id, vehicle_id, notification_type, arrival_time, expect_from, expect_until)
-        values (%s,%s,%s, %s,%s,%s)
+        (visit_id, vehicle_id, notification_type, arrival_time, expect_from, expect_until, created_at)
+        values (%s,%s,%s, %s,%s,%s, %s)
         """
         args = (
             visit.id,
@@ -43,7 +44,8 @@ class Model():
             notification_type,
             arrival_time,
             expect_from,
-            expect_until)
+            expect_until,
+            now_datetime)
         self.cursor.execute(query, args)
         self.conn.commit()
 
