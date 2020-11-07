@@ -36,7 +36,7 @@ class Model():
         query = """
         Insert into notifications
         (visit_id, vehicle_id, notification_type, arrival_time, expect_from, expect_until, created_at)
-        values (%s,%s,%s, %s,%s,%s, %s)
+        values (%s,%s,%s, %s,%s,%s, %s, %s)
         """
         args = (
             visit.id,
