@@ -240,7 +240,7 @@ class Model():
                 vehicle_name = vehicle['name']
                 vehicle_shift_start = vehicle['shift-start']
                 vehicle_shift_end = vehicle['shift-end']
-                vehicle_phone_number = vehicle['phone-number']
+                vehicle_phone_number = vehicle['phone-number'] if 'phone-number' in vehicle else None
                 start_location = vehicle['start-location']
                 start_location_id = start_location['id']
                 start_location_address = start_location['address']
