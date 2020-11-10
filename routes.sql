@@ -88,4 +88,10 @@ create table vehicle_capacities (
 	capacity_number integer
 );
 
-
+create table if not exists orders(
+    id bigserial primary key,
+    remote_id text,
+    ecommerce text,
+    status text,
+    eta timestamp
+);
