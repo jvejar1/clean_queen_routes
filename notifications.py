@@ -222,28 +222,6 @@ class Model():
         else:
             return False
             
-    def early_planned_deliveries_not_notified(self, route_id):
-        pass
-
-    def get_planned_deliveries_not_notified(self, route_id, early_visits_time_until):
-        project_id = route_id.project_id
-        vehicle_id = route_id.vehicle_id
-        visits_to_notify_query = """select vi.id as id, location_name, arrival_time, location_id from visits vi, vehicles ve
-                where vi.project_id = %s 
-                and vi.vehicle_id=%s 
-                and (vi.status!='done' or vi.status is NULL) 
-                and (vi.notified_planned_delivery != TRUE or vi.notified_planned_delivery is NULL)
-                and ve.id = vi.vehicle_id and vi.location_id != ve.start_location_id and vi.location_id!=ve.end_location_id
-                and vi.is_break!=TRUE and vi.arrival_time >= %s
-                    order by arrival_time asc;
-                """
-
-        args = (project_id, vehicle_id, early_visits_time_until)
-        
-        
-        cursor.execute(visits_to_notify_query, args)
-        visits_to_notify = cursor.fetchall()
-        return visits_to_notify
 
     def parse_and_limit_time(self, time_str):
         max_time = datetime.time(hour = 23, minute= 59)
