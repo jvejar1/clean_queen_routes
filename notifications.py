@@ -7,6 +7,7 @@ import array as arr
 import json
 import requests
 from psycopg2.extras import NamedTupleCursor
+from collections import namedtuple
 url = 'https://api.routific.com/product/projects'
 headers = {'content-type': 'application/json',
             'Authorization': 'bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI1ZTc3ZTdiZjgzYjc5ODAwMTcxZWE1ZjYiLCJpYXQiOjE2MDI1OTM3MTV9.2kTMhN8iUMkSiVwJsJdgtphuEdPVBYvh5eVsX5IOV9k'}
@@ -15,6 +16,7 @@ r= requests.get(url, headers=headers)
 class NotificationType:
     CANCELLED = 'cancelled'
     COMPLETED = 'completed'
+    SKIPPED = 'skipped'
     OUT_OF_DELIVERY = 'out_of_delivery'
     PLANNED_DELIVERY = 'planned_delivery'
 
@@ -22,9 +24,53 @@ class Model():
     conn = None
     cursor = None
     def __init__(self, conn, cursor):
-        self.conn = conn
-        self.cursor = cursor
+        self.conn = psycopg2.connect(
+            host="localhost",
+            database="clean_queen_routes",
+            user="postgres",
+            password="postgres",
+            cursor_factory=NamedTupleCursor)
+        self.cursor = self.conn.cursor()
+
+    def get_visit_by_name (self, project, name):
+        query = "Select * from visits where location_name like %s and project_id = %s;"
+        args = (name, project.id)
+        self.cursor.execute(query, args)
+        visit = self.cursor.fetchone()
+        return visit
+
+    def get_route(self, project_id, vehicle_id):
+        Route = namedtuple('route', 'project_id vehicle_id')
+        return Route(project_id, vehicle_id)
+
+    def get_project_by_name(self, project_name):
+        project_name_like =""
+        for word in project_name.split(' '):
+            project_name_like+="%{}%".format(word)
+        query = "Select * from projects where lower(name) like %s"
+        args = (project_name_like,)
+        self.cursor.execute(query,args)
+        project = self.cursor.fetchone()
+        return project
     
+    def get_vehicle_by_driver_name(self, driver_name):
+
+        driver_name_like = ""
+        for word in driver_name.split(' '):
+            driver_name_like += "%{}%".format(word)
+        query = "select* from vehicles where lower(name) like %s"
+        args = (driver_name_like,)
+        self.cursor.execute(query, args)
+        vehicle = self.cursor.fetchone()
+        return vehicle
+
+    def get_vehicle_by_id(self, vehicle_id):
+        query = "Select * from vehicles where id=%s; "
+        args = (vehicle_id,)
+        self.cursor.execute(query,args)
+        vehicle = self.cursor.fetchone()
+        return vehicle
+
     def insert_notification(self, visit, notification_type, arrival_time, expect_from = None, expect_until= None):
         project = self.get_project(visit)
         vehicle = self.get_vehicle(visit)
@@ -62,12 +108,12 @@ class Model():
         return vehicle
 
 
-    def get_notifications(self, visit_id):
+    def get_notifications(self, visit):
         query = """
         Select * from notifications 
-        where visit_id=%s;
+        where visit_id=%s order by created_at asc;
         """
-        args = (visit_id,)
+        args = (visit.id,)
         self.cursor.execute(query, args)
         return self.cursor.fetchall()
 
@@ -85,6 +131,18 @@ class Model():
         vehicle_id = route.vehicle_id
         project_id = route.project_id
         query = "Select * from visits where vehicle_id = %s and project_id = %s order by arrival_time asc;"
+        args = (vehicle_id, project_id)
+        self.cursor.execute(query, args)
+        visits = self.cursor.fetchall()
+        return visits
+
+    def get_visits_without_vehicle_locations(self, route):
+        vehicle_id = route.vehicle_id
+        project_id = route.project_id
+        query = """Select * from visits 
+        where vehicle_id = %s and project_id = %s and is_break!=TRUE and is_vehicle_start_location!=TRUE and is_vehicle_end_location!=TRUE
+        order by arrival_time asc;
+        """
         args = (vehicle_id, project_id)
         self.cursor.execute(query, args)
         visits = self.cursor.fetchall()
@@ -152,11 +210,11 @@ class Model():
             return True
         else:
             return False
-
+    
     def route_has_been_started(self, route_id):
         project_id = route_id.project_id
         vehicle_id = route_id.vehicle_id
-        query = "select * from visits where project_id='{}' and vehicle_id='{}' and status='done' order by arrival_time asc limit 1".format(project_id, vehicle_id)
+        query = "select * from visits where project_id='{}' and vehicle_id='{}' and is_vehicle_start_location =TRUE and status='done' order by arrival_time asc limit 1".format(project_id, vehicle_id)
         self.cursor.execute(query)
         route_has_been_started = self.cursor.fetchone()
         if (route_has_been_started):
@@ -411,21 +469,21 @@ if __name__ == "__main__":
             route_has_been_started = model.route_has_been_started(route)
             route_is_late = model.route_is_late(route)
 
-            visits = model.get_visits(route)
+            visits = model.get_visits_without_vehicle_locations(route)
 
             for visit in visits:
+                
                 #notify planned delivery
                 now_time =  now_dt.time()
                 last_notification = model.get_last_notification(visit)
-                visit_is_not_completed = visit.status != 'done' and visit.status !='skipped'
+                visit_is_not_completed_nor_skipped = visit.status != 'done' and visit.status !='skipped'
                 
-
                 visit_are_late_for_customer= last_notification and (last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.OUT_OF_DELIVERY) and last_notification.expect_until < now_time
 
                 #check if is out of delivery or an early visit
                 out_of_delivery_dt_bound = now_dt + datetime.timedelta(minutes =out_of_delivery_minutes_bound * 0.7)
                 is_out_of_delivery = visit.arrival_time < out_of_delivery_dt_bound.time()
-                if (not route_is_late) and route_has_been_started and visit_is_not_completed and is_out_of_delivery and ((not last_notification) or last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.CANCELLED):
+                if (not route_is_late) and route_has_been_started and visit_is_not_completed_nor_skipped and is_out_of_delivery and ((not last_notification) or last_notification.notification_type == NotificationType.PLANNED_DELIVERY or last_notification.notification_type == NotificationType.CANCELLED):
                     expect_from = now_dt
                     expect_until = now_dt + datetime.timedelta(minutes = out_of_delivery_minutes_bound)
                     
@@ -441,7 +499,7 @@ if __name__ == "__main__":
                 #check if is planned_delivery
                 last_notification = model.get_last_notification(visit)
                 visit_is_in_the_future = visit.arrival_time > now_time
-                if route_has_been_started and (not route_is_late) and visit_is_in_the_future and visit_is_not_completed and ((not last_notification) or last_notification.notification_type == NotificationType.CANCELLED):
+                if route_has_been_started and (not route_is_late) and visit_is_in_the_future and visit_is_not_completed_nor_skipped and ((not last_notification) or last_notification.notification_type == NotificationType.CANCELLED):
                     expect_from = datetime.datetime.combine(now_dt,visit.arrival_time) - datetime.timedelta(minutes = planned_delivery_notification_window)
                     expect_from = max(expect_from, now_dt + datetime.timedelta(minutes=7))
 
@@ -455,10 +513,9 @@ if __name__ == "__main__":
                         expect_until = expect_until.time()
                         )
                     
-                
                 #notification completed
                 last_notification = model.get_last_notification(visit)
-                visit_is_completed = visit.status == 'done' or visit.status == 'skipped'
+                visit_is_completed = visit.status == 'done'
                 if visit_is_completed and ((not last_notification) or last_notification.notification_type != NotificationType.COMPLETED):
                     model.insert_notification(
                         visit= visit,
@@ -468,12 +525,20 @@ if __name__ == "__main__":
                         expect_until = None
                         )
                     pass
-                
-                #notification cancelled
-                visit_was_cancelled = not visit.vehicle_id #cancelled
-                if visit_was_cancelled and last_notification.notification_type != NotificationType.CANCELLED:
-                    pass
 
+                #visit was skipped
+                last_notification = model.get_last_notification(visit)
+                visit_was_skipped  = visit.status == 'skipped'
+                if visit_was_skipped and ((not last_notification) or last_notification.notification_type != NotificationType.SKIPPED ):
+                    model.insert_notification(
+                        visit = visit,
+                        notification_type = NotificationType.SKIPPED,
+                        arrival_time = visit.arrival_time,
+                        expect_from = None,
+                        expect_until = None
+                    )
+                
+                
         #TODO: process today cancelled routes  
         cancelled_visits = model.get_today_cancelled_visits()
         for visit in cancelled_visits:
