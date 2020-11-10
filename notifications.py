@@ -63,6 +63,10 @@ class Model():
         self.cursor.execute(query, args)
         vehicle = self.cursor.fetchone()
         return vehicle
+    def get_arrival_timestamp(self, visit):
+        project = self.get_project(visit)
+        timestamp = datetime.datetime.combine(project.project_date, visit.arrival_time)
+        return timestamp
 
     def get_vehicle_by_id(self, vehicle_id):
         query = "Select * from vehicles where id=%s; "
@@ -174,7 +178,7 @@ class Model():
         cancelled_visits = self.cursor.fetchall()
         return cancelled_visits
 
-    def get_today_routes_ids(self):
+    def get_today_routes(self):
         today_routes_ids = """
         select v.project_id, v.vehicle_id 
         from visits v, projects p 
@@ -188,6 +192,21 @@ class Model():
         routes_ids = self.cursor.fetchall()
         return routes_ids
     
+    
+    def get_routes(self, project_name):
+        routes_query = """
+        select v.project_id, v.vehicle_id 
+        from visits v, projects p 
+        where p.id=v.project_id 
+        and p.name=%s and v.vehicle_id is not null
+            group by v.project_id, v.vehicle_id"""
+
+        args = (project_name,)
+        self.cursor.execute(routes_query, args)
+        routes = self.cursor.fetchall()
+        return routes
+    
+
     def route_is_late(self, route):
         project_id = route.project_id
         vehicle_id = route.vehicle_id
@@ -432,7 +451,7 @@ if __name__ == "__main__":
         log_lines = ""
         #a route is identified by a project_id and a vehicle_id
         
-        today_routes = model.get_today_routes_ids()
+        today_routes = today_routes = model.get_today_routes()
         now_dt = datetime.datetime.now()
         
         planned_delivery_notification_window = 70
